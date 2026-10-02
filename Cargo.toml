@@ -1,0 +1,9 @@
+[package]
+name = "xlgrep-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+calamine = { version = "0.36.1", features = ["dates"] }
+clap = { version = "4.6.7", features = ["derive"] }
+regex = "1.13.1"
