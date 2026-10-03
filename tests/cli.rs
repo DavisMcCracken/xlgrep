@@ -57,3 +57,11 @@ fn a_far_off_cell_is_streamed_not_allocated() {
     assert_eq!(out.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&out.stdout).contains(r#""cell":"XFD1048576""#));
 }
+
+#[test]
+fn a_mistyped_sheet_is_an_error_not_a_miss() {
+    let out = xlgrep(&["jane", "--sheet", "Contcts", BOOK]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("\"Contcts\""));
+    assert_eq!(xlgrep(&["jane", "-i", "--sheet", "contacts", BOOK]).status.code(), Some(0));
+}

@@ -362,9 +362,7 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
     for si in 0..scan.rep.sheets.len() {
         let name = scan.rep.sheets[si].clone();
         // skipped before parsing, so filtering by sheet also saves the read (xlsx, xlsb)
-        if !args.sheet.is_empty()
-            && !args.sheet.iter().any(|s| s.to_lowercase() == name.to_lowercase())
-        {
+        if !args.sheet.is_empty() && !args.sheet.iter().any(|s| same_sheet(s, &name)) {
             continue;
         }
         match read_sheet(&mut wb, &name, args.formulas, |r, c, text| scan.cell(si, r, c, text)) {
@@ -692,6 +690,11 @@ impl Printer<'_> {
     }
 }
 
+/// Excel treats sheet names case-insensitively.
+fn same_sheet(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -722,8 +725,12 @@ fn collect(paths: &[PathBuf], errors: &mut usize) -> Vec<(PathBuf, bool)> {
     let mut found = Vec::new();
     for p in paths {
         match std::fs::metadata(p) {
-            Err(_) => {
-                eprintln!("xlgrep: {}: no such file or directory", p.display());
+            Err(e) => {
+                let why = match e.kind() {
+                    io::ErrorKind::NotFound => "no such file or directory".into(),
+                    _ => e.to_string(), // e.g. access denied
+                };
+                eprintln!("xlgrep: {}: {why}", p.display());
                 *errors += 1;
             }
             Ok(m) if m.is_dir() => walk(p, &mut found, errors),
@@ -848,6 +855,8 @@ fn main() -> ExitCode {
     };
     let (mut hits, mut files_hit) = (0usize, 0usize);
     let mut write_err = None;
+    // which --sheet names some workbook has: a typo would otherwise look like "no match"
+    let mut sheet_found = vec![false; args.sheet.len()];
 
     let search_file = |i: usize| search(&files[i], &rx, &args);
     search_all(files.len(), search_file, |i, res| {
@@ -860,6 +869,9 @@ fn main() -> ExitCode {
                 return true;
             }
         };
+        for (found, want) in sheet_found.iter_mut().zip(&args.sheet) {
+            *found = *found || rep.sheets.iter().any(|s| same_sheet(s, want));
+        }
         errors += rep.sheet_errors.len();
         for (si, why) in &rep.sheet_errors {
             eprintln!("xlgrep: skipped {name} | {}: {why}", visible(&rep.sheets[*si]));
@@ -874,6 +886,13 @@ fn main() -> ExitCode {
         }
         true
     });
+    // unless the search stopped early or never opened anything (-m 0, no files)
+    if write_err.is_none() && !files.is_empty() && args.max_count != Some(0) {
+        for (want, _) in args.sheet.iter().zip(&sheet_found).filter(|(_, found)| !**found) {
+            eprintln!("xlgrep: no sheet named \"{}\" in the searched files", visible(want));
+            errors += 1;
+        }
+    }
     // a closed pipe (`| head`) is a normal way to stop; anything else (disk full) lost output
     if let Some(e) = write_err.filter(|e| e.kind() != io::ErrorKind::BrokenPipe) {
         eprintln!("xlgrep: error writing output: {e}");
@@ -887,6 +906,7 @@ fn main() -> ExitCode {
         );
     }
     if tty && !args.files_with_matches {
+        printer.color &= io::stderr().is_terminal(); // the summary goes to stderr: maybe a log
         let summary =
             format!("{} in {}", plural(hits, "hit", "hits"), plural(files_hit, "file", "files"));
         eprintln!("{}", printer.paint(&summary, "2"));
