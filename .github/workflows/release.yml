@@ -21,7 +21,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup target add ${{ matrix.target }}
       - run: cargo test --locked --release --target ${{ matrix.target }}
       - run: cargo build --locked --release --target ${{ matrix.target }}
@@ -37,7 +37,7 @@ jobs:
         run: |
           name="xlgrep-${{ github.ref_name }}-${{ matrix.target }}"
           tar czf "$name.tar.gz" -C target/${{ matrix.target }}/release xlgrep -C "$GITHUB_WORKSPACE" README.md LICENSE-MIT LICENSE-APACHE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: xlgrep-*
@@ -47,7 +47,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
       - run: sha256sum xlgrep-* > SHA256SUMS
