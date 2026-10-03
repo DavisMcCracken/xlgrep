@@ -756,7 +756,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Printer, build_regex, col_letter, sheet_ref};
+    use super::{Args, Printer, build_regex, col_letter, json_str, sheet_ref};
     use clap::Parser;
 
     fn rx(argv: &[&str]) -> regex::Regex {
@@ -806,5 +806,12 @@ mod tests {
         assert_eq!(sheet_ref("Q3 Sales"), "'Q3 Sales'");
         assert_eq!(sheet_ref("2024"), "'2024'");
         assert_eq!(sheet_ref("Bob's"), "'Bob''s'");
+    }
+
+    #[test]
+    fn json_strings_escape_per_rfc_8259() {
+        let mut out = String::new();
+        json_str(&mut out, "say \"hi\" C:\\x\n\r\t\u{1}\u{1f} é€😀\u{7f}");
+        assert_eq!(out, r#""say \"hi\" C:\\x\n\r\t\u0001\u001f é€😀"#.to_owned() + "\u{7f}\"");
     }
 }

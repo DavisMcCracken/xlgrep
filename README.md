@@ -170,6 +170,8 @@ Don't pass `--download` (it downloads OneDrive online-only files) without asking
 
 ## Development
 
+[![ci](https://github.com/DavisMcCracken/xlgrep/actions/workflows/ci.yml/badge.svg)](https://github.com/DavisMcCracken/xlgrep/actions/workflows/ci.yml)
+
 Build and run
 ```
 cargo run --release -- <xlgrep args>
