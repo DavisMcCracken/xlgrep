@@ -5,11 +5,12 @@
   <img src="assets/xlgrep-logo-light.svg" width="360" alt="xlgrep">
 </picture>
 
-**[Usage] • [Key features] • [Installation] • [Development]**
+**[Usage] • [Key features] • [Installation] • [AI agents] • [Development]**
 
 [Usage]: #usage
 [Key features]: #key-features
 [Installation]: #installation
+[AI agents]: #using-with-ai-agents
 [Development]: #development
 
 *xlgrep* is grep for spreadsheets: search cell values and formulas<br>
@@ -80,13 +81,21 @@ window width. `--row` prints each matching row in full instead of single cells.
 </summary>
 <p></p>
 
+AI agents can't read spreadsheets with their usual tools: `.xlsx` files are compressed, so
+`grep`, `rg` and file readers find nothing inside them, and agents fall back to writing
+openpyxl or pandas scripts. xlgrep is one command instead, with no Python environment.
+
 `--json` prints JSON Lines: `{"file","sheet","cell","value"}` per hit, plus
 `"row_values": {"A": …, "C": …}` keyed by column with `--row` (formula cells only with
-`--formulas`). Piped without `--json`, it's one `file | sheet | cell | value` line per hit.
-Closing the pipe early (`| head -50`) stops the search.
+`--formulas`). Only matching cells reach the agent's context, not whole sheets, and `-m`, `-l`,
+`-c` and `| head` cap how much comes back; closing the pipe early stops the search. Every hit
+names its sheet and cell, so a person can check it in Excel.
 
 Exit code 0 if anything matched, 1 if not, 2 on an error: bad arguments, or anything that couldn't
-be searched (matches elsewhere still print).
+be searched. Matches elsewhere still print and stderr names each skipped file and why, so an agent
+can tell "not there" from "couldn't look". xlgrep is read-only and won't download OneDrive files
+unless asked, so it's safe to let an agent run it without approval. See
+[Using with AI agents](#using-with-ai-agents).
 </details>
 
 <details>
@@ -141,6 +150,22 @@ Or build from source:
 
 ```
 cargo install --git https://github.com/DavisMcCracken/xlgrep --locked
+```
+
+## Using with AI agents
+
+Paste this into your agent instructions (`AGENTS.md`, `CLAUDE.md`, …):
+
+```markdown
+To search or read .xlsx/.xlsm/.xlsb/.xls/.ods files, use `xlgrep` instead of writing
+openpyxl/pandas scripts. Use `--json` when parsing output: `{"file","sheet","cell","value"}`
+per hit; add `--row` for the whole matching row. Keep output small: `-m 20` per file, `-l` for
+matching files only, `-c` for counts, `| head -N` overall.
+Examples: `xlgrep "smith" -i --json -m 20`, `xlgrep VLOOKUP --formulas -l`,
+`xlgrep . book.xlsx --sheet Sheet1 --json | head -100` (dump a sheet's non-empty cells).
+Numbers are raw (search `51200`, not `$51,200.00`). Exit 1 = no match; exit 2 = something
+couldn't be searched: read stderr before concluding a value isn't there.
+Don't pass `--download` (it downloads OneDrive online-only files) without asking.
 ```
 
 ## Development
