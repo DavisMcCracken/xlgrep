@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/xlgrep-logo-dark.svg">
-  <img src="assets/xlgrep-logo-light.svg" width="360" alt="xlgrep">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/DavisMcCracken/xlgrep/main/assets/xlgrep-logo-dark.svg">
+  <img src="https://raw.githubusercontent.com/DavisMcCracken/xlgrep/main/assets/xlgrep-logo-light.svg" width="360" alt="xlgrep">
 </picture>
 
 **[Usage] • [Key features] • [Installation] • [AI agents] • [Development]**
@@ -16,7 +16,7 @@
 *xlgrep* is grep for spreadsheets: search cell values and formulas<br>
 across folders of `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods` files. Read-only.
 
-<img src="assets/demo.png" width="403" alt="xlgrep smith -i: matches grouped by workbook, with Excel-style refs like 'Q3 Sales'!B6 and the match highlighted">
+<img src="https://raw.githubusercontent.com/DavisMcCracken/xlgrep/main/assets/demo.png" width="403" alt="xlgrep smith -i: matches grouped by workbook, with Excel-style refs like 'Q3 Sales'!B6 and the match highlighted">
 
 </div>
 
@@ -199,7 +199,8 @@ On Windows without admin/Visual Studio, use the GNU toolchain: `scoop install ru
 
 Bump `version` in `Cargo.toml`, commit, then `git tag v0.2.0 && git push --tags`. The release
 workflow checks the tag matches `Cargo.toml`, builds and tests, publishes the binaries with
-`SHA256SUMS`, updates the Scoop manifest (`bucket/xlgrep.json`) and publishes to crates.io.
+`SHA256SUMS`, updates the Scoop manifest (`bucket/xlgrep.json`) and publishes to crates.io and
+PyPI (wheels built with maturin, holding the same binary).
 Running it by hand from the Actions tab builds and tests without publishing.
 
 ## License
