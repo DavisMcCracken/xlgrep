@@ -15,7 +15,7 @@ use calamine::{
 use clap::Parser;
 use regex::Regex;
 
-const EXTS: [&str; 5] = ["xlsx", "xlsm", "xlsb", "xls", "ods"];
+const EXTS: [&str; 7] = ["xlsx", "xlsm", "xlsb", "xls", "ods", "xltx", "xltm"];
 const ROW_SEP: &str = " │ ";
 // SGR colors, grep-style
 const FILE: &str = "35";
@@ -391,7 +391,7 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
     if args.max_count == Some(0) {
         return Ok(Report::default()); // grep -m 0: nothing to find, so don't even open it
     }
-    let mut wb = open_workbook_auto(path).map_err(|e| why_unreadable(&e))?;
+    let mut wb = open(path).map_err(|e| why_unreadable(&e))?;
     let mut scan = Scan::new(rx, args);
     scan.rep.sheets = wb.sheet_names();
     for si in 0..scan.rep.sheets.len() {
@@ -408,6 +408,16 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
     }
     scan.end_row();
     Ok(scan.rep)
+}
+
+/// calamine picks the reader by extension and doesn't know templates, which are xlsx inside.
+fn open(path: &Path) -> Result<Sheets<BufReader<File>>, calamine::Error> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext == "xltx" || ext == "xltm" {
+        calamine::open_workbook(path).map(Sheets::Xlsx).map_err(calamine::Error::Xlsx)
+    } else {
+        open_workbook_auto(path)
+    }
 }
 
 /// Feeds a sheet's cells to `cell` as (row, column, text) in row order, until it returns true;

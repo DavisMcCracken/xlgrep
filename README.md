@@ -48,8 +48,8 @@ Run `xlgrep --help` for the full option list.
 </summary>
 <p></p>
 
-`.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods`, read with [calamine](https://github.com/tafia/calamine).
-No Excel or LibreOffice needed. Values print as Excel shows them where calamine allows: `TRUE`,
+`.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods`, plus `.xltx`/`.xltm` templates, read with
+[calamine](https://github.com/tafia/calamine). No Excel or LibreOffice needed. Values print as Excel shows them where calamine allows: `TRUE`,
 `2024-03-05`, `14:30:00`, `36:05:07` durations.
 </details>
 

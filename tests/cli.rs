@@ -65,3 +65,16 @@ fn a_mistyped_sheet_is_an_error_not_a_miss() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("\"Contcts\""));
     assert_eq!(xlgrep(&["jane", "-i", "--sheet", "contacts", BOOK]).status.code(), Some(0));
 }
+
+#[test]
+fn templates_are_searched() {
+    let dir = std::env::temp_dir().join(format!("xlgrep-templates-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(BOOK, dir.join("a.xltx")).unwrap();
+    std::fs::copy(BOOK, dir.join("b.xltm")).unwrap();
+    let out = xlgrep(&["jane", "-i", "-c", dir.to_str().unwrap()]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("a.xltx: 1") && stdout.contains("b.xltm: 1"), "{stdout}");
+}
