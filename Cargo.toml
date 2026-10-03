@@ -21,3 +21,4 @@ terminal_size = "0.4.4"
 lto = true
 codegen-units = 1
 strip = true
+# no `panic = "abort"`: workers catch calamine panics so one bad file can't take down the search

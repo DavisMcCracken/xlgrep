@@ -601,14 +601,13 @@ fn collect(paths: &[PathBuf], errors: &mut usize) -> Vec<(PathBuf, bool)> {
     found
 }
 
-/// Search `files` in parallel and hand each result to `emit` in file order; `emit` returns
-/// false to stop early (stdout closed). Workers run at most `window` files ahead of `emit`, so
-/// one slow file can't make every later report pile up in memory; the worker holding the
-/// oldest unemitted file never waits.
+/// Run `work` on files `0..n` in parallel and hand each result to `emit` in file order; `emit`
+/// returns false to stop early (stdout closed). Workers run at most `window` files ahead of
+/// `emit`, so one slow file can't make every later report pile up in memory; the worker
+/// holding the oldest unemitted file never waits. A panic in `work` becomes that file's `Err`.
 fn search_all(
-    files: &[PathBuf],
-    rx: &Regex,
-    args: &Args,
+    n: usize,
+    work: impl Fn(usize) -> Result<Report, String> + Sync,
     mut emit: impl FnMut(usize, Result<Report, String>) -> bool,
 ) {
     let next = AtomicUsize::new(0);
@@ -618,13 +617,15 @@ fn search_all(
     let progress = (Mutex::new((0usize, false)), Condvar::new());
     let (tx, results) = mpsc::channel();
     std::thread::scope(|s| {
-        for _ in 0..workers.min(files.len()) {
+        for _ in 0..workers.min(n) {
             let tx = tx.clone();
-            let (next, progress) = (&next, &progress);
+            let (next, progress, work) = (&next, &progress, &work);
             s.spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(path) = files.get(i) else { break };
+                    if i >= n {
+                        break;
+                    }
                     let p = progress.0.lock().unwrap();
                     let p = progress
                         .1
@@ -634,7 +635,11 @@ fn search_all(
                         break; // stopped early: don't start another workbook
                     }
                     drop(p);
-                    if tx.send((i, search(path, rx, args))).is_err() {
+                    // calamine panics on some malformed files; a lost result would stall `emit`
+                    // and with it every worker. The default hook has already printed the panic.
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(i)))
+                        .unwrap_or_else(|_| Err("the reader crashed (a calamine bug)".into()));
+                    if tx.send((i, res)).is_err() {
                         break;
                     }
                 }
@@ -698,7 +703,8 @@ fn main() -> ExitCode {
     let (mut hits, mut files_hit) = (0usize, 0usize);
     let mut write_err = None;
 
-    search_all(&files, &rx, &args, |i, res| {
+    let search_file = |i: usize| search(&files[i], &rx, &args);
+    search_all(files.len(), search_file, |i, res| {
         let name = display(&files[i], &cwd);
         let rep = match res {
             Ok(rep) => rep,
@@ -751,8 +757,9 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Printer, build_regex, col_letter, json_str, sheet_ref};
+    use super::{Args, Printer, Report, build_regex, col_letter, json_str, search_all, sheet_ref};
     use clap::Parser;
+    use std::time::Duration;
 
     fn rx(argv: &[&str]) -> regex::Regex {
         build_regex(&Args::parse_from([&["xlgrep"], argv].concat())).unwrap()
@@ -787,6 +794,28 @@ mod tests {
         assert_eq!(p.render(&["abcdef"], Some(5)), "abcd…");
         assert_eq!(p.render(&["ab", "cdef"], Some(7)), "ab │ c…");
         assert_eq!(p.render(&["a\nb\u{1b}"], None), "a\\nb\\u{1b}");
+    }
+
+    #[test]
+    fn a_panicking_file_is_skipped_not_hung() {
+        // far more files than the worker window: a lost result used to stall every worker
+        let n = 1000;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut got = Vec::new();
+            search_all(
+                n,
+                |i| if i == 1 { panic!("simulated calamine panic") } else { Ok(Report::default()) },
+                |i, res| {
+                    got.push((i, res.is_ok()));
+                    true
+                },
+            );
+            tx.send(got).unwrap();
+        });
+        let got = rx.recv_timeout(Duration::from_secs(30)).expect("search_all hung");
+        let want: Vec<_> = (0..n).map(|i| (i, i != 1)).collect();
+        assert_eq!(got, want);
     }
 
     #[test]
