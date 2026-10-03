@@ -1,9 +1,9 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "grep for spreadsheets: search cell values and formulas across .xlsx/.xlsm/.xlsb/.xls/.ods files",
   "homepage": "https://github.com/DavisMcCracken/xlgrep",
   "license": "MIT|Apache-2.0",
-  "url": "https://github.com/DavisMcCracken/xlgrep/releases/download/v0.2.0/xlgrep-v0.2.0-x86_64-pc-windows-msvc.zip",
-  "hash": "9463b918cab1c8f3520f93ed96d318549861ba083ef487c3fe1cecf7933a98dd",
+  "url": "https://github.com/DavisMcCracken/xlgrep/releases/download/v0.3.0/xlgrep-v0.3.0-x86_64-pc-windows-msvc.zip",
+  "hash": "6a3168fcf4b6162822068924c601168166b88fe182476d547fbeb43208626910",
   "bin": "xlgrep.exe"
 }
