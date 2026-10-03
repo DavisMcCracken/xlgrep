@@ -17,6 +17,9 @@ regex = "1.13.1"
 regex-syntax = "0.8.11"
 terminal_size = "0.4.4"
 
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
 [profile.release]
 # a single downloadable binary: smaller beats faster builds
 lto = true

@@ -17,6 +17,13 @@ use regex::Regex;
 
 const EXTS: [&str; 5] = ["xlsx", "xlsm", "xlsb", "xls", "ods"];
 const ROW_SEP: &str = " │ ";
+// SGR colors, grep-style
+const FILE: &str = "35";
+const FILE_HEADING: &str = "1;35";
+const SHEET: &str = "36";
+const CELL: &str = "32";
+const MATCH: &str = "1;31";
+const DIM: &str = "2";
 
 const EXAMPLES: &str = "\
 Examples:
@@ -348,7 +355,8 @@ impl Hit {
 struct Report {
     sheets: Vec<String>,
     hits: Vec<Hit>,
-    n: usize,
+    /// cells (rows with `--row`) that matched, also those `-c` and `-l` don't keep
+    hit_count: usize,
     /// per-sheet read failures: (sheet, reason)
     sheet_errors: Vec<(usize, String)>,
 }
@@ -477,7 +485,7 @@ impl<'a> Scan<'a> {
             return false;
         }
         self.row_matched = true;
-        self.rep.n += 1;
+        self.rep.hit_count += 1;
         if args.files_with_matches {
             return true;
         }
@@ -504,7 +512,7 @@ impl<'a> Scan<'a> {
     }
 
     fn limit_reached(&self) -> bool {
-        self.args.max_count.is_some_and(|m| self.rep.n >= m)
+        self.args.max_count.is_some_and(|m| self.rep.hit_count >= m)
     }
 }
 
@@ -561,7 +569,7 @@ impl Printer<'_> {
                     out.push('…');
                     break;
                 }
-                out += &self.paint(ROW_SEP, "2");
+                out += &self.paint(ROW_SEP, DIM);
                 left -= sep;
             }
             if !self.push_cell(&mut out, cell, &mut left) {
@@ -591,7 +599,7 @@ impl Printer<'_> {
             if esc.len() > *left {
                 return false;
             }
-            *out += &self.paint(&esc, "2");
+            *out += &self.paint(&esc, DIM);
             *left -= esc.len();
             rest = &rest[end + c.len_utf8()..];
         }
@@ -602,7 +610,7 @@ impl Printer<'_> {
         if !self.color {
             return text.to_owned();
         }
-        self.rx.replace_all(text, |m: &regex::Captures| self.paint(&m[0], "1;31")).into_owned()
+        self.rx.replace_all(text, |m: &regex::Captures| self.paint(&m[0], MATCH)).into_owned()
     }
 
     fn cells<'h>(&self, h: &'h Hit) -> Vec<&'h str> {
@@ -645,17 +653,17 @@ impl Printer<'_> {
         }
         let name = visible(name);
         if args.files_with_matches {
-            return writeln!(out, "{}", self.paint(&name, "35"));
+            return writeln!(out, "{}", self.paint(&name, FILE));
         }
         if args.count {
-            return writeln!(out, "{}: {}", self.paint(&name, "35"), rep.n);
+            return writeln!(out, "{}: {}", self.paint(&name, FILE), rep.hit_count);
         }
         if !self.heading {
-            let sep = self.paint("|", "2");
-            let name = self.paint(&name, "35");
+            let sep = self.paint("|", DIM);
+            let name = self.paint(&name, FILE);
             for h in &rep.hits {
-                let sheet = self.paint(&visible(&rep.sheets[h.sheet]), "36");
-                let cell = self.paint(&h.cell(), "32");
+                let sheet = self.paint(&visible(&rep.sheets[h.sheet]), SHEET);
+                let cell = self.paint(&h.cell(), CELL);
                 writeln!(
                     out,
                     "{name} {sep} {sheet} {sep} {cell} {sep} {}",
@@ -668,7 +676,7 @@ impl Printer<'_> {
         if self.files_printed > 1 {
             writeln!(out)?;
         }
-        writeln!(out, "{}", self.paint(&name, "1;35"))?;
+        writeln!(out, "{}", self.paint(&name, FILE_HEADING))?;
         let refs: Vec<(String, String)> = rep
             .hits
             .iter()
@@ -681,8 +689,8 @@ impl Printer<'_> {
             writeln!(
                 out,
                 "  {}!{}{:pad$}  {}",
-                self.paint(sheet, "36"),
-                self.paint(cell, "32"),
+                self.paint(sheet, SHEET),
+                self.paint(cell, CELL),
                 "",
                 self.render(&self.cells(h), budget)
             )?;
@@ -877,8 +885,8 @@ fn main() -> ExitCode {
         for (si, why) in &rep.sheet_errors {
             eprintln!("xlgrep: skipped {name} | {}: {why}", visible(&rep.sheets[*si]));
         }
-        if rep.n > 0 {
-            hits += rep.n;
+        if rep.hit_count > 0 {
+            hits += rep.hit_count;
             files_hit += 1;
             if let Err(e) = printer.report(&mut out, &name, &rep).and_then(|()| out.flush()) {
                 write_err = Some(e);
@@ -910,7 +918,7 @@ fn main() -> ExitCode {
         printer.color &= io::stderr().is_terminal(); // the summary goes to stderr: maybe a log
         let summary =
             format!("{} in {}", plural(hits, "hit", "hits"), plural(files_hit, "file", "files"));
-        eprintln!("{}", printer.paint(&summary, "2"));
+        eprintln!("{}", printer.paint(&summary, DIM));
     }
     ExitCode::from(if errors > 0 { 2 } else { u8::from(hits == 0) })
 }
