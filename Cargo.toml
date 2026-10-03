@@ -2,9 +2,12 @@
 name = "xlgrep"
 version = "0.1.0"
 edition = "2024"
-description = "Search spreadsheet cell values (.xlsx/.xlsm/.xlsb/.xls/.ods) across folders"
+description = "grep for spreadsheets: search cell values and formulas across .xlsx/.xlsm/.xlsb/.xls/.ods files"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/DavisMcCracken/xlgrep"
+keywords = ["excel", "spreadsheet", "grep", "xlsx", "search"]
+categories = ["command-line-utilities"]
+include = ["src/", "README.md", "LICENSE-*"]
 
 [dependencies]
 calamine = { version = "0.36.1", features = ["dates"] }

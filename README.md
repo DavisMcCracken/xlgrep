@@ -142,7 +142,14 @@ The human-readable output is for reading. Anything that parses output should use
 
 ## Installation
 
-Download the zip (Windows) or tar.gz (Linux x86_64/ARM, static, any distro) from
+Windows, with [Scoop](https://scoop.sh):
+
+```
+scoop bucket add xlgrep https://github.com/DavisMcCracken/xlgrep
+scoop install xlgrep
+```
+
+Or download the zip (Windows) or tar.gz (Linux x86_64/ARM, static, any distro) from
 [Releases](https://github.com/DavisMcCracken/xlgrep/releases), unpack, and put `xlgrep` on your
 PATH. Each release has a `SHA256SUMS` file to check the download.
 
@@ -187,8 +194,9 @@ On Windows without admin/Visual Studio, use the GNU toolchain: `scoop install ru
 ### Releasing
 
 Bump `version` in `Cargo.toml`, commit, then `git tag v0.2.0 && git push --tags`. The release
-workflow builds, tests and publishes the binaries with `SHA256SUMS`. Running it by hand from the
-Actions tab builds and tests without publishing.
+workflow checks the tag matches `Cargo.toml`, builds and tests, publishes the binaries with
+`SHA256SUMS`, updates the Scoop manifest (`bucket/xlgrep.json`) and publishes to crates.io.
+Running it by hand from the Actions tab builds and tests without publishing.
 
 ## License
 
