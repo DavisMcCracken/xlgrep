@@ -95,10 +95,8 @@ be searched (matches elsewhere still print).
 </summary>
 <p></p>
 
-Files are read in parallel and output stays in file order. Against the
-[Python version](https://github.com/DavisMcCracken/xlgrep-py) it's 6.5x faster on a small folder,
-3.4x on a 50k-row file and 2.2x walking ~12k files, before parallel reads were added. See
-[Benchmarks](#benchmarks).
+Files are read in parallel and output stays in file order: 400 files x 2000 rows take 0.25 s
+instead of 1.56 s read one at a time. `--sheet` skips parsing other sheets entirely.
 </details>
 
 <details>
@@ -164,12 +162,6 @@ On Windows without admin/Visual Studio, use the GNU toolchain: `scoop install ru
 Bump `version` in `Cargo.toml`, commit, then `git tag v0.2.0 && git push --tags`. The release
 workflow builds, tests and publishes the binaries with `SHA256SUMS`. Running it by hand from the
 Actions tab builds and tests without publishing.
-
-### Benchmarks
-
-Against the Python version (2026-10-02, hyperfine, before parallel reads): 6.5x faster on a small
-folder (47 ms vs 303 ms, mostly Python startup), 3.4x on a 50k-row file, 2.2x walking ~12k files.
-Parallel reads: 400 files x 2000 rows went from 1.56 s to 0.25 s (warm cache).
 
 ## License
 
