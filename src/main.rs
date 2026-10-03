@@ -189,11 +189,6 @@ fn visible(s: &str) -> Cow<'_, str> {
     Cow::Owned(s.chars().map(|c| if c.is_control() { ctl_escape(c) } else { c.into() }).collect())
 }
 
-/// Length of `s` once its control characters are escaped.
-fn shown_len(s: &str) -> usize {
-    s.chars().map(|c| if c.is_control() { ctl_escape(c).len() } else { 1 }).sum()
-}
-
 /// Text that gets searched: cell values, or formula text with `--formulas`.
 trait CellText: CellType {
     /// Borrows when possible; otherwise formats into `buf`.
@@ -220,7 +215,7 @@ impl CellText for Data {
                 None => write!(buf, "{self}"),
             },
             Data::DateTime(_) | Data::DateTimeIso(_) => match self.as_datetime() {
-                Some(d) if d.time() == chrono::NaiveTime::MIN => write!(buf, "{}", d.date()),
+                Some(d) if d.time() == Default::default() => write!(buf, "{}", d.date()), // midnight
                 Some(d) => write!(buf, "{d}"),
                 None => write!(buf, "{self}"),
             },
@@ -413,8 +408,8 @@ impl Printer<'_> {
     // ponytail: counts chars, not display columns; wide (CJK) text can still wrap
     fn render(&self, cells: &[&str], budget: Option<usize>) -> String {
         let sep = ROW_SEP.chars().count();
-        let total: usize =
-            cells.iter().map(|c| shown_len(c)).sum::<usize>() + sep * cells.len().saturating_sub(1);
+        let total: usize = cells.iter().map(|c| visible(c).chars().count()).sum::<usize>()
+            + sep * cells.len().saturating_sub(1);
         // one char reserved for the `…`, only when it'll be needed
         let mut left = match budget {
             Some(b) if total > b => b.saturating_sub(1),
