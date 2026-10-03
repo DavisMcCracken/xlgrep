@@ -248,24 +248,45 @@ fn value_text<'b>(v: &Data, buf: &'b mut String) -> &'b str {
         Data::Bool(b) => return if *b { "TRUE" } else { "FALSE" }, // as Excel shows them
         // [h]:mm:ss cells: hours keep counting past 24, as Excel shows them
         Data::DateTime(dt) if dt.is_duration() => match dt.as_duration() {
-            Some(d) => {
-                let (sign, s) = if d.num_seconds() < 0 {
-                    ("-", -d.num_seconds())
-                } else {
-                    ("", d.num_seconds())
-                };
-                write!(buf, "{sign}{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
-            }
+            Some(d) => hms(buf, d.num_seconds()),
+            None => write!(buf, "{v}"),
+        },
+        // how ods stores durations and times of day
+        Data::DurationIso(iso) => match iso_seconds(iso) {
+            Some(s) => hms(buf, s),
+            None => write!(buf, "{v}"),
+        },
+        // a time of day: no date part (serial 0 is Excel's made-up 1900-01-00)
+        Data::DateTime(dt) if (0.0..1.0).contains(&dt.as_f64()) => match v.as_time() {
+            Some(t) => write!(buf, "{t}"),
             None => write!(buf, "{v}"),
         },
         Data::DateTime(_) | Data::DateTimeIso(_) => match v.as_datetime() {
-            Some(d) if d.time() == Default::default() => write!(buf, "{}", d.date()), // midnight
+            Some(d) if d.date().and_hms_opt(0, 0, 0) == Some(d) => write!(buf, "{}", d.date()),
             Some(d) => write!(buf, "{d}"),
             None => write!(buf, "{v}"),
         },
         _ => write!(buf, "{v}"),
     };
     buf
+}
+
+/// `36:05:07`, `-0:30:00`
+fn hms(buf: &mut String, seconds: i64) -> std::fmt::Result {
+    let sign = if seconds < 0 { "-" } else { "" };
+    let s = seconds.unsigned_abs();
+    write!(buf, "{sign}{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+}
+
+/// Seconds in an ISO 8601 duration as ods writes them: `PT36H05M07S`, `-PT00H30M00S`.
+fn iso_seconds(iso: &str) -> Option<i64> {
+    let (sign, iso) = iso.strip_prefix('-').map_or((1, iso), |rest| (-1, rest));
+    let (h, rest) = iso.strip_prefix("PT")?.split_once('H')?;
+    let (m, s) = rest.split_once('M')?;
+    let s = s.strip_suffix('S')?.parse::<f64>().ok()?;
+    #[allow(clippy::cast_possible_truncation)] // whole seconds, as for xlsx durations
+    let s = s as i64;
+    Some(sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60 + s))
 }
 
 impl CellText for String {
@@ -876,8 +897,10 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, Printer, Report, Scan, build_regex, col_letter, json_str, search_all, sheet_ref,
+        Args, CellText, Printer, Report, Scan, build_regex, col_letter, json_str, search_all,
+        sheet_ref,
     };
+    use calamine::{Data, ExcelDateTime};
     use clap::Parser;
     use std::time::Duration;
 
@@ -952,6 +975,23 @@ mod tests {
         let row0 = vec![(0, s("a")), (1, s("smith")), (2, s("smith"))];
         let row1 = vec![(0, s("smith")), (3, s("z"))];
         assert_eq!(got, [(0, 1, &row0), (1, 0, &row1)]);
+    }
+
+    #[test]
+    fn values_print_as_excel_shows_them() {
+        use calamine::ExcelDateTimeType::{DateTime, TimeDelta};
+        let dt = |v, ty| Data::DateTime(ExcelDateTime::new(v, ty, false));
+        let mut buf = String::new();
+        let mut t = |d: Data| d.text(&mut buf).to_owned();
+        assert_eq!(t(Data::Bool(true)), "TRUE");
+        assert_eq!(t(Data::Float(51200.0)), "51200");
+        assert_eq!(t(dt(45356.0, DateTime)), "2024-03-05");
+        assert_eq!(t(dt(45356.5, DateTime)), "2024-03-05 12:00:00");
+        assert_eq!(t(dt(14.5 / 24.0, DateTime)), "14:30:00"); // an h:mm cell
+        assert_eq!(t(dt(129_907.0 / 86_400.0, TimeDelta)), "36:05:07");
+        assert_eq!(t(Data::DurationIso("PT36H05M07S".into())), "36:05:07");
+        assert_eq!(t(Data::DurationIso("-PT00H30M00S".into())), "-0:30:00");
+        assert_eq!(t(Data::DurationIso("P1D".into())), "P1D"); // not ods' shape: as stored
     }
 
     #[test]
