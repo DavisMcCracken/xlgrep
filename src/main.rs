@@ -2,13 +2,16 @@
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::io::{self, BufWriter, IsTerminal, Write};
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, mpsc};
 
-use calamine::{CellType, Data, DataType, Range, Reader, open_workbook_auto};
+use calamine::{
+    Cell, CellType, Data, DataRef, DataType, Range, Reader, Sheets, XlsxError, open_workbook_auto,
+};
 use clap::Parser;
 use regex::Regex;
 
@@ -197,32 +200,50 @@ trait CellText: CellType {
 
 impl CellText for Data {
     fn text<'a>(&'a self, buf: &'a mut String) -> &'a str {
-        buf.clear();
-        let _ = match self {
-            Data::String(s) => return s,
-            Data::Empty => return "",
-            Data::Bool(b) => return if *b { "TRUE" } else { "FALSE" }, // as Excel shows them
-            // [h]:mm:ss cells: hours keep counting past 24, as Excel shows them
-            Data::DateTime(dt) if dt.is_duration() => match dt.as_duration() {
-                Some(d) => {
-                    let (sign, s) = if d.num_seconds() < 0 {
-                        ("-", -d.num_seconds())
-                    } else {
-                        ("", d.num_seconds())
-                    };
-                    write!(buf, "{sign}{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
-                }
-                None => write!(buf, "{self}"),
-            },
-            Data::DateTime(_) | Data::DateTimeIso(_) => match self.as_datetime() {
-                Some(d) if d.time() == Default::default() => write!(buf, "{}", d.date()), // midnight
-                Some(d) => write!(buf, "{d}"),
-                None => write!(buf, "{self}"),
-            },
-            _ => write!(buf, "{self}"),
-        };
-        buf
+        match self {
+            Data::String(s) => s,
+            v => value_text(v, buf),
+        }
     }
+}
+
+/// What xlsx and xlsb cells stream as: shared strings stay borrowed, nothing is copied.
+impl CellText for DataRef<'_> {
+    fn text<'a>(&'a self, buf: &'a mut String) -> &'a str {
+        match self {
+            DataRef::SharedString(s) => s,
+            DataRef::String(s) => s,
+            v => value_text(&v.clone().into(), buf),
+        }
+    }
+}
+
+/// A non-string value as Excel shows it, formatted into `buf`.
+fn value_text<'b>(v: &Data, buf: &'b mut String) -> &'b str {
+    buf.clear();
+    let _ = match v {
+        Data::Empty => return "",
+        Data::Bool(b) => return if *b { "TRUE" } else { "FALSE" }, // as Excel shows them
+        // [h]:mm:ss cells: hours keep counting past 24, as Excel shows them
+        Data::DateTime(dt) if dt.is_duration() => match dt.as_duration() {
+            Some(d) => {
+                let (sign, s) = if d.num_seconds() < 0 {
+                    ("-", -d.num_seconds())
+                } else {
+                    ("", d.num_seconds())
+                };
+                write!(buf, "{sign}{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+            }
+            None => write!(buf, "{v}"),
+        },
+        Data::DateTime(_) | Data::DateTimeIso(_) => match v.as_datetime() {
+            Some(d) if d.time() == Default::default() => write!(buf, "{}", d.date()), // midnight
+            Some(d) => write!(buf, "{d}"),
+            None => write!(buf, "{v}"),
+        },
+        _ => write!(buf, "{v}"),
+    };
+    buf
 }
 
 impl CellText for String {
@@ -293,80 +314,156 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
         return Ok(Report::default()); // grep -m 0: nothing to find, so don't even open it
     }
     let mut wb = open_workbook_auto(path).map_err(|e| why_unreadable(&e))?;
-    let mut rep = Report { sheets: wb.sheet_names(), ..Report::default() };
-    let mut buf = String::new();
-    for si in 0..rep.sheets.len() {
-        let name = &rep.sheets[si];
-        // skipped before parsing, so filtering by sheet also saves the read
+    let mut scan = Scan::new(rx, args);
+    scan.rep.sheets = wb.sheet_names();
+    for si in 0..scan.rep.sheets.len() {
+        let name = scan.rep.sheets[si].clone();
+        // skipped before parsing, so filtering by sheet also saves the read (xlsx, xlsb)
         if !args.sheet.is_empty()
             && !args.sheet.iter().any(|s| s.to_lowercase() == name.to_lowercase())
         {
             continue;
         }
-        let done = if args.formulas {
-            wb.worksheet_formula(name)
-                .map(|r| scan(&r, si, rx, args, &mut rep.hits, &mut rep.n, &mut buf))
-        } else {
-            wb.worksheet_range(name)
-                .map(|r| scan(&r, si, rx, args, &mut rep.hits, &mut rep.n, &mut buf))
-        };
-        match done {
+        match read_sheet(&mut wb, &name, args.formulas, |r, c, text| scan.cell(si, r, c, text)) {
             Ok(true) => break,
             Ok(false) => {}
-            Err(e) => rep.sheet_errors.push((si, why_unreadable(&e))),
+            Err(e) => scan.rep.sheet_errors.push((si, why_unreadable(&e))),
         }
     }
-    Ok(rep)
+    scan.end_row();
+    Ok(scan.rep)
 }
 
-/// Search one sheet. Returns true when the file is done (`-l` hit or `-m` reached).
-fn scan<T: CellText>(
+/// Feeds a sheet's cells to `cell` as (row, column, text) in row order, until it returns true;
+/// returns whether it did. xlsx and xlsb stream, so one far-off cell can't make a small file
+/// allocate its whole grid (calamine#693).
+// ponytail: xls and ods are still read whole (calamine parses them on open); an ods with a
+// far-off cell can still exhaust memory. Cap by dimensions if that shows up.
+fn read_sheet(
+    wb: &mut Sheets<BufReader<File>>,
+    name: &str,
+    formulas: bool,
+    mut cell: impl FnMut(usize, usize, &str) -> bool,
+) -> Result<bool, calamine::Error> {
+    match wb {
+        Sheets::Xlsx(x) => {
+            let mut rd = match x.worksheet_cells_reader(name) {
+                Err(XlsxError::NotAWorksheet(_)) => return Ok(false), // a chart sheet
+                rd => rd.map_err(calamine::Error::Xlsx)?,
+            };
+            if formulas {
+                stream(|| rd.next_formula(), &mut cell)
+            } else {
+                stream(|| rd.next_cell(), &mut cell)
+            }
+            .map_err(calamine::Error::Xlsx)
+        }
+        Sheets::Xlsb(x) => {
+            let mut rd = x.worksheet_cells_reader(name).map_err(calamine::Error::Xlsb)?;
+            if formulas {
+                stream(|| rd.next_formula(), &mut cell)
+            } else {
+                stream(|| rd.next_cell(), &mut cell)
+            }
+            .map_err(calamine::Error::Xlsb)
+        }
+        _ if formulas => Ok(feed_range(&wb.worksheet_formula(name)?, &mut cell)),
+        _ => Ok(feed_range(&wb.worksheet_range(name)?, &mut cell)),
+    }
+}
+
+fn stream<T: CellText, E>(
+    mut next: impl FnMut() -> Result<Option<Cell<T>>, E>,
+    cell: &mut impl FnMut(usize, usize, &str) -> bool,
+) -> Result<bool, E> {
+    let mut buf = String::new();
+    while let Some(c) = next()? {
+        let (r, col) = c.get_position();
+        if cell(r as usize, col as usize, c.get_value().text(&mut buf)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn feed_range<T: CellText>(
     range: &Range<T>,
-    sheet: usize,
-    rx: &Regex,
-    args: &Args,
-    hits: &mut Vec<Hit>,
-    n: &mut usize,
-    buf: &mut String,
+    cell: &mut impl FnMut(usize, usize, &str) -> bool,
 ) -> bool {
     let (r0, c0) = range.start().unwrap_or((0, 0));
-    let mut last_row = None;
-    for (r, c, cell) in range.used_cells() {
-        let text = cell.text(buf);
-        if text.is_empty() || !rx.is_match(text) || (args.row && last_row == Some(r)) {
-            continue;
+    let mut buf = String::new();
+    range.used_cells().any(|(r, c, v)| cell(r0 as usize + r, c0 as usize + c, v.text(&mut buf)))
+}
+
+/// Builds one file's report from its cells, fed in row order (the order calamine yields them).
+struct Scan<'a> {
+    rx: &'a Regex,
+    args: &'a Args,
+    rep: Report,
+    /// with `--row`: the row being read as (sheet, row), its non-empty cells, whether it
+    /// matched yet, and its hit, which gets the row's cells once the row ends
+    row: Option<(usize, usize)>,
+    row_cells: Vec<(usize, String)>,
+    row_matched: bool,
+    pending: Option<Hit>,
+}
+
+impl<'a> Scan<'a> {
+    fn new(rx: &'a Regex, args: &'a Args) -> Self {
+        let rep = Report::default();
+        Scan { rx, args, rep, row: None, row_cells: Vec::new(), row_matched: false, pending: None }
+    }
+
+    /// Feeds one cell (0-based, absolute). Returns true when the file is done: an `-l` hit,
+    /// or `-m` reached (with `--row`, once the row it was reached in is complete).
+    fn cell(&mut self, sheet: usize, row: usize, col: usize, text: &str) -> bool {
+        let args = self.args;
+        if args.row && self.row != Some((sheet, row)) {
+            if self.end_row() {
+                return true;
+            }
+            self.row = Some((sheet, row));
         }
-        *n += 1;
+        if text.is_empty() {
+            return false;
+        }
+        let whole_row = args.row && !args.count;
+        if whole_row {
+            self.row_cells.push((col, text.to_owned()));
+        }
+        if (args.row && self.row_matched) || !self.rx.is_match(text) {
+            return false;
+        }
+        self.row_matched = true;
+        self.rep.n += 1;
         if args.files_with_matches {
             return true;
         }
-        last_row = Some(r);
         if !args.count {
-            hits.push(Hit {
-                sheet,
-                row: r0 as usize + r,
-                col: c0 as usize + c,
-                text: text.to_owned(),
-                row_values: if args.row { row_values(range, r, c0 as usize) } else { Vec::new() },
-            });
+            let hit = Hit { sheet, row, col, text: text.to_owned(), row_values: Vec::new() };
+            if args.row {
+                self.pending = Some(hit);
+            } else {
+                self.rep.hits.push(hit);
+            }
         }
-        if args.max_count.is_some_and(|m| *n >= m) {
-            return true;
-        }
+        !whole_row && self.limit_reached()
     }
-    false
-}
 
-fn row_values<T: CellText>(range: &Range<T>, r: usize, c0: usize) -> Vec<(usize, String)> {
-    let mut buf = String::new();
-    let row = &range[r];
-    row.iter()
-        .enumerate()
-        .filter_map(|(c, cell)| {
-            let t = cell.text(&mut buf);
-            (!t.is_empty()).then(|| (c0 + c, t.to_owned()))
-        })
-        .collect()
+    /// Completes the current row's hit. Returns true when `-m` has been reached.
+    fn end_row(&mut self) -> bool {
+        if let Some(mut hit) = self.pending.take() {
+            hit.row_values = std::mem::take(&mut self.row_cells);
+            self.rep.hits.push(hit);
+        }
+        self.row_cells.clear();
+        self.row_matched = false;
+        self.limit_reached()
+    }
+
+    fn limit_reached(&self) -> bool {
+        self.args.max_count.is_some_and(|m| self.rep.n >= m)
+    }
 }
 
 fn json_str(out: &mut String, s: &str) {
@@ -756,7 +853,9 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Printer, Report, build_regex, col_letter, json_str, search_all, sheet_ref};
+    use super::{
+        Args, Printer, Report, Scan, build_regex, col_letter, json_str, search_all, sheet_ref,
+    };
     use clap::Parser;
     use std::time::Duration;
 
@@ -815,6 +914,22 @@ mod tests {
         let got = rx.recv_timeout(Duration::from_secs(30)).expect("search_all hung");
         let want: Vec<_> = (0..n).map(|i| (i, i != 1)).collect();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn row_hits_get_the_whole_row_and_m_ends_after_it() {
+        let args = Args::parse_from(["xlgrep", "smith", "--row", "-m", "2"]);
+        let rx = build_regex(&args).unwrap();
+        let mut scan = Scan::new(&rx, &args);
+        // in reading order: each row's hit comes before the rest of its row has been read
+        let cells = [(0, 0, "a"), (0, 1, "smith"), (0, 2, "smith"), (1, 0, "smith"), (1, 3, "z")];
+        assert!(!cells.iter().any(|&(r, c, t)| scan.cell(0, r, c, t)));
+        assert!(scan.cell(0, 2, 0, "smith")); // -m 2 reached in row 1: stop once it's complete
+        let s = |t: &str| t.to_owned();
+        let got: Vec<_> = scan.rep.hits.iter().map(|h| (h.row, h.col, &h.row_values)).collect();
+        let row0 = vec![(0, s("a")), (1, s("smith")), (2, s("smith"))];
+        let row1 = vec![(0, s("smith")), (3, s("z"))];
+        assert_eq!(got, [(0, 1, &row0), (1, 0, &row1)]);
     }
 
     #[test]

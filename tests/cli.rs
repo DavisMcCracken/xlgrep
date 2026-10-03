@@ -48,3 +48,12 @@ fn exit_codes_tell_no_match_from_error() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), good.to_str().unwrap());
     assert!(String::from_utf8_lossy(&out.stderr).contains("broken.xlsx"));
 }
+
+#[test]
+fn a_far_off_cell_is_streamed_not_allocated() {
+    // far-cell.xlsx = contacts.xlsx plus "far corner" at XFD1048576, which once made calamine
+    // allocate the whole sheet (512 GiB) and abort
+    let out = xlgrep(&["corner", "--json", "--row", "tests/data/far-cell.xlsx"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(r#""cell":"XFD1048576""#));
+}
