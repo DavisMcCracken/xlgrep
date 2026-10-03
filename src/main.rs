@@ -14,10 +14,6 @@ use parking_lot::{Condvar, Mutex};
 use regex::Regex;
 
 const EXTS: [&str; 5] = ["xlsx", "xlsm", "xlsb", "xls", "ods"];
-// Windows marks OneDrive online-only files with these; reading the content triggers a download
-const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
-const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
-const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
 const ROW_SEP: &str = " │ ";
 
 const EXAMPLES: &str = "\
@@ -86,6 +82,10 @@ struct Args {
 #[cfg(windows)]
 fn is_cloud_only(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
+    // OneDrive marks online-only files with these; reading the content triggers a download
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
     let cloud = FILE_ATTRIBUTE_OFFLINE
         | FILE_ATTRIBUTE_RECALL_ON_OPEN
         | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
