@@ -162,11 +162,33 @@ fn col_letter(mut i: usize) -> String {
     String::from_utf8(s).unwrap()
 }
 
-/// Sheet name as Excel writes it in a reference: quoted unless purely alphanumeric/underscore.
+/// Sheet name as Excel writes it in a reference: quoted unless purely alphanumeric/underscore
+/// and not readable as a cell itself (`Q3`, `FY2024`, `R1C1`).
 fn sheet_ref(name: &str) -> Cow<'_, str> {
     let plain = name.chars().all(|c| c.is_alphanumeric() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit());
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && !looks_like_cell(name);
     if plain { Cow::Borrowed(name) } else { Cow::Owned(format!("'{}'", name.replace('\'', "''"))) }
+}
+
+/// A1 to XFD1048576, or R1C1-style (`R`, `C`, `RC`, `R2`, `R2C3`), in any case.
+fn looks_like_cell(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    let row = up.trim_start_matches(|c: char| c.is_ascii_uppercase());
+    let col = &up[..up.len() - row.len()];
+    let a1 = !col.is_empty()
+        && (col.len(), col) <= (3, "XFD")
+        && digits(row)
+        && row.parse::<u32>().is_ok_and(|r| (1..=1_048_576).contains(&r));
+    let r1c1 = match up.strip_prefix('R') {
+        Some(rest) => {
+            let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+            rest.is_empty() || rest.strip_prefix('C').is_some_and(digits)
+        }
+        None => up.strip_prefix('C').is_some_and(digits),
+    };
+    a1 || r1c1
 }
 
 fn display(p: &Path, cwd: &Path) -> String {
@@ -944,6 +966,13 @@ mod tests {
         assert_eq!(sheet_ref("Q3 Sales"), "'Q3 Sales'");
         assert_eq!(sheet_ref("2024"), "'2024'");
         assert_eq!(sheet_ref("Bob's"), "'Bob''s'");
+        // names Excel would read as a cell
+        for name in ["Q3", "fy2024", "XFD1048576", "R", "C", "rc", "R1C1", "R2", "C3"] {
+            assert_eq!(sheet_ref(name), format!("'{name}'"));
+        }
+        for name in ["XFE1", "A1048577", "A0", "Sales2024", "Rates", "CC", "Données"] {
+            assert_eq!(sheet_ref(name), name);
+        }
     }
 
     #[test]
