@@ -152,6 +152,15 @@ scoop bucket add xlgrep https://github.com/DavisMcCracken/xlgrep
 scoop install xlgrep
 ```
 
+Windows, macOS or Linux, from [PyPI](https://pypi.org/project/xlgrep/) with
+[uv](https://docs.astral.sh/uv/) or pipx. The wheel holds the same binary; there's no Python code.
+
+```
+uv tool install xlgrep        # or: pipx install xlgrep
+```
+
+`uvx xlgrep …` runs it without installing.
+
 Or download the zip (Windows) or tar.gz (Linux x86_64/ARM, static, any distro) from
 [Releases](https://github.com/DavisMcCracken/xlgrep/releases), unpack, and put `xlgrep` on your
 PATH. Each release has a `SHA256SUMS` file to check the download.
@@ -168,9 +177,10 @@ Paste this into your agent instructions (`AGENTS.md`, `CLAUDE.md`, …):
 
 ```markdown
 To search or read .xlsx/.xlsm/.xlsb/.xls/.ods files, use `xlgrep` instead of writing
-openpyxl/pandas scripts. Use `--json` when parsing output: `{"file","sheet","cell","value"}`
-per hit; add `--row` for the whole matching row. Keep output small: `-m 20` per file, `| head -N`
-overall; `-l` (matching files) and `-c` (hits per file) print plain lines, not JSON.
+openpyxl/pandas scripts (if it isn't installed, `uvx xlgrep …` runs it). Use `--json` when
+parsing output: `{"file","sheet","cell","value"}` per hit; add `--row` for the whole matching row.
+Keep output small: `-m 20` per file, `| head -N` overall; `-l` (matching files) and `-c` (hits per
+file) print plain lines, not JSON.
 Examples: `xlgrep "smith" -i --json -m 20`, `xlgrep VLOOKUP --formulas -l`,
 `xlgrep . book.xlsx --sheet Sheet1 --json | head -100` (dump a sheet's non-empty cells).
 Numbers are raw (search `51200`, not `$51,200.00`). Exit 1 = no match; exit 2 = something
