@@ -301,12 +301,38 @@ impl CellText for String {
     fn text<'a>(&'a self, buf: &'a mut String) -> &'a str {
         // ODS stores formulas as `of:=SUM([.A1])`; xlsx/xlsb/xls without the `=`
         let f = self.strip_prefix("of:").unwrap_or(self);
-        if f.is_empty() || f.starts_with('=') {
+        let plain = !f.contains("_xl");
+        if f.is_empty() || (plain && f.starts_with('=')) {
             return f;
         }
         buf.clear();
-        buf.push('=');
-        buf.push_str(f);
+        if !f.starts_with('=') {
+            buf.push('=');
+        }
+        if plain {
+            buf.push_str(f);
+            return buf;
+        }
+        // Excel hides the prefixes files store for functions newer than Excel 2007
+        // (`_xlfn.XLOOKUP`, `_xlfn._xlws.FILTER`) and for LAMBDA parameters (`_xlpm.x`)
+        let mut quote = None; // inside "text" or a 'quoted sheet name': kept as stored
+        let mut rest = f;
+        while let Some(c) = rest.chars().next() {
+            if quote.is_none()
+                && let Some(after) =
+                    ["_xlfn.", "_xlws.", "_xlpm."].iter().find_map(|p| rest.strip_prefix(p))
+            {
+                rest = after;
+                continue;
+            }
+            quote = match quote {
+                None if c == '"' || c == '\'' => Some(c),
+                Some(q) if q == c => None,
+                q => q,
+            };
+            buf.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
         buf
     }
 }
@@ -1021,6 +1047,22 @@ mod tests {
         assert_eq!(t(Data::DurationIso("PT36H05M07S".into())), "36:05:07");
         assert_eq!(t(Data::DurationIso("-PT00H30M00S".into())), "-0:30:00");
         assert_eq!(t(Data::DurationIso("P1D".into())), "P1D"); // not ods' shape: as stored
+    }
+
+    #[test]
+    fn formulas_read_as_in_excel() {
+        let mut buf = String::new();
+        let mut t = |f: &str| f.to_owned().text(&mut buf).to_owned();
+        assert_eq!(t("SUM(A1:A9)"), "=SUM(A1:A9)");
+        assert_eq!(t("of:=SUM([.A1])"), "=SUM([.A1])");
+        assert_eq!(t("_xlfn.XLOOKUP(A1,B:B,C:C)"), "=XLOOKUP(A1,B:B,C:C)");
+        assert_eq!(t("_xlfn._xlws.FILTER(A:A,B:B>1)"), "=FILTER(A:A,B:B>1)");
+        assert_eq!(t("_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)(3)"), "=LAMBDA(x,x*2)(3)");
+        // text and quoted sheet names stay as stored, even with a ' inside "text"
+        assert_eq!(
+            t(r#"IF(A1="O'Brien _xlfn.",_xlfn.CONCAT(B1),'_xlfn. odd'!A1)"#),
+            r#"=IF(A1="O'Brien _xlfn.",CONCAT(B1),'_xlfn. odd'!A1)"#
+        );
     }
 
     #[test]

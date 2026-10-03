@@ -61,7 +61,8 @@ No Excel or LibreOffice needed. Values print as Excel shows them where calamine 
 
 Patterns are regexes; `-F` for literal text, `-i` to ignore case, `-w` for whole words (`-wF "C++"`
 works too), `-x` to match the whole cell. `--sheet` limits the search to sheets with that name
-(case-insensitive). `--formulas` searches formula text (`=SUM(A1:A9)`) instead of values.
+(case-insensitive). `--formulas` searches formula text instead of values, as Excel shows it:
+`=XLOOKUP(A1,B:B,C:C)`, not the `_xlfn.XLOOKUP` stored in the file.
 </details>
 
 <details>
