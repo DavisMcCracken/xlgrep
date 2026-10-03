@@ -6,11 +6,10 @@ use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Condvar, Mutex, mpsc};
 
 use calamine::{CellType, Data, DataType, Range, Reader, open_workbook_auto};
 use clap::Parser;
-use parking_lot::{Condvar, Mutex};
 use regex::Regex;
 
 const EXTS: [&str; 5] = ["xlsx", "xlsm", "xlsb", "xls", "ods"];
@@ -631,10 +630,11 @@ fn search_all(
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(path) = files.get(i) else { break };
-                    let mut p = progress.0.lock();
-                    progress.1.wait_while(&mut p, |(done, stop)| {
-                        !*stop && i >= done.saturating_add(window)
-                    });
+                    let p = progress.0.lock().unwrap();
+                    let p = progress
+                        .1
+                        .wait_while(p, |(done, stop)| !*stop && i >= done.saturating_add(window))
+                        .unwrap();
                     if p.1 {
                         break; // stopped early: don't start another workbook
                     }
@@ -653,7 +653,7 @@ fn search_all(
             pending.insert(i, res);
             while let Some(res) = pending.remove(&want) {
                 want += 1;
-                progress.0.lock().0 = want;
+                progress.0.lock().unwrap().0 = want;
                 progress.1.notify_all();
                 if !emit(want - 1, res) {
                     break 'recv;
@@ -661,7 +661,7 @@ fn search_all(
             }
         }
         // done or stopped: wake waiting workers so they exit instead of blocking the scope
-        progress.0.lock().1 = true;
+        progress.0.lock().unwrap().1 = true;
         progress.1.notify_all();
     });
 }
