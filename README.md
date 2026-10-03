@@ -153,10 +153,10 @@ Or download the zip (Windows) or tar.gz (Linux x86_64/ARM, static, any distro) f
 [Releases](https://github.com/DavisMcCracken/xlgrep/releases), unpack, and put `xlgrep` on your
 PATH. Each release has a `SHA256SUMS` file to check the download.
 
-Or build from source:
+Or with Cargo:
 
 ```
-cargo install --git https://github.com/DavisMcCracken/xlgrep --locked
+cargo install xlgrep --locked
 ```
 
 ## Using with AI agents
