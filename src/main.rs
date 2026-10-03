@@ -699,7 +699,8 @@ fn main() -> ExitCode {
         width: terminal_size::terminal_size().filter(|_| tty).map(|(w, _)| usize::from(w.0)),
         files_printed: 0,
     };
-    // stdout is line-buffered by std: right for a terminal, slow for pipes
+    // stdout is line-buffered by std: right for a terminal, slow for pipes. Flushed after each
+    // file, so `| head` gets results as they're found and closing it stops the search.
     let mut out: Box<dyn Write> = if tty {
         Box::new(io::stdout().lock())
     } else {
@@ -714,32 +715,25 @@ fn main() -> ExitCode {
         let rep = match res {
             Ok(rep) => rep,
             Err(why) => {
-                let _ = out.flush(); // keep warnings in order with results
                 eprintln!("xlgrep: skipped {name}: {why}");
                 errors += 1;
                 return true;
             }
         };
-        if !rep.sheet_errors.is_empty() {
-            let _ = out.flush();
-            errors += rep.sheet_errors.len();
-        }
+        errors += rep.sheet_errors.len();
         for (si, why) in &rep.sheet_errors {
             eprintln!("xlgrep: skipped {name} | {}: {why}", visible(&rep.sheets[*si]));
         }
         if rep.n > 0 {
             hits += rep.n;
             files_hit += 1;
-            if let Err(e) = printer.report(&mut out, &name, &rep) {
+            if let Err(e) = printer.report(&mut out, &name, &rep).and_then(|()| out.flush()) {
                 write_err = Some(e);
                 return false;
             }
         }
         true
     });
-    if let Err(e) = out.flush() {
-        write_err.get_or_insert(e);
-    }
     // a closed pipe (`| head`) is a normal way to stop; anything else (disk full) lost output
     if let Some(e) = write_err.filter(|e| e.kind() != io::ErrorKind::BrokenPipe) {
         eprintln!("xlgrep: error writing output: {e}");
