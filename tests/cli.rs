@@ -78,3 +78,16 @@ fn templates_are_searched() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("a.xltx: 1") && stdout.contains("b.xltm: 1"), "{stdout}");
 }
+
+#[test]
+fn a_file_reached_twice_is_searched_once() {
+    // the folder, plus the same file through `..` and, on Windows, in other case
+    let mut args = vec!["jane", "-i", "-l", "tests/data", "tests/../tests/data/contacts.xlsx"];
+    if cfg!(windows) {
+        args.push("TESTS/DATA/CONTACTS.XLSX");
+    }
+    let out = xlgrep(&args);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    assert_eq!(stdout.matches("contacts.xlsx").count(), 1, "{stdout}");
+}

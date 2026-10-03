@@ -787,9 +787,19 @@ fn collect(paths: &[PathBuf], errors: &mut usize) -> Vec<(PathBuf, bool)> {
             }
         }
     }
-    // `. a.xlsx` or `a.xlsx a.xlsx` would otherwise search (and print) a file twice
-    let mut seen = std::collections::HashSet::new();
-    found.retain(|(p, _)| seen.insert(std::path::absolute(p).unwrap_or_else(|_| p.clone())));
+    // `. a.xlsx`, `a.xlsx A.XLSX` (Windows) or a folder plus a link to it would otherwise search
+    // (and print) a file twice. One argument never yields a file twice (the walk doesn't follow
+    // links), so only overlapping arguments pay for resolving paths, which opens each file;
+    // OneDrive online-only files are compared unresolved, never opened.
+    if paths.len() > 1 {
+        let mut seen = std::collections::HashSet::new();
+        found.retain(|(p, cloud)| {
+            let real = if *cloud { None } else { std::fs::canonicalize(p).ok() };
+            seen.insert(
+                real.unwrap_or_else(|| std::path::absolute(p).unwrap_or_else(|_| p.clone())),
+            )
+        });
+    }
     found
 }
 
