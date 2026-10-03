@@ -689,7 +689,12 @@ fn main() -> ExitCode {
     let mut printer = Printer {
         args: &args,
         rx: &rx,
-        color: tty && std::env::var_os("NO_COLOR").is_none(),
+        // conhost shows escapes as garbage until VT is switched on; mintty (Git Bash) is a pipe
+        // that can't be switched but speaks ANSI anyway. NO_COLOR counts only when non-empty.
+        color: tty
+            && !anstyle_query::no_color()
+            && (anstyle_query::windows::enable_ansi_colors().unwrap_or(true)
+                || anstyle_query::term_supports_ansi_color()),
         heading: tty,
         width: terminal_size::terminal_size().filter(|_| tty).map(|(w, _)| usize::from(w.0)),
         files_printed: 0,

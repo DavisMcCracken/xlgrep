@@ -10,6 +10,7 @@ categories = ["command-line-utilities"]
 include = ["src/", "README.md", "LICENSE-*"]
 
 [dependencies]
+anstyle-query = "1.1.5"
 calamine = { version = "0.36.1", features = ["dates"] }
 clap = { version = "4.6.7", features = ["derive"] }
 regex = "1.13.1"
