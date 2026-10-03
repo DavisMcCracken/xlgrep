@@ -33,6 +33,14 @@ never mass-downloads your OneDrive; `--download` includes them. Exit code 0 if a
 matched, 1 if not, 2 on an error: bad arguments, or anything that couldn't be searched
 (matches elsewhere still print). Skipped OneDrive files aren't errors.
 
+## Install
+
+Download the zip (Windows) or tar.gz (Linux x86_64/ARM, static, any distro) from
+[Releases](https://github.com/DavisMcCracken/xlgrep/releases), unpack, and put `xlgrep` on your
+PATH. Or build from source: `cargo install --git https://github.com/DavisMcCracken/xlgrep --locked`.
+
+## Develop
+
 ```
 cargo build --release
 cargo test
@@ -40,6 +48,13 @@ cargo test
 
 On Windows without admin/Visual Studio, use the GNU toolchain: `scoop install rustup-gnu`.
 
+Release: bump `version` in `Cargo.toml`, commit, then `git tag v0.2.0 && git push --tags`. The
+release workflow builds, tests and publishes the binaries with `SHA256SUMS`.
+
 Benchmarks vs the Python version (2026-10-02, hyperfine, before parallel reads): 6.5x faster on
 a small folder (47 ms vs 303 ms, mostly Python startup), 3.4x on a 50k-row file, 2.2x walking
 ~12k files. Parallel reads: 400 files x 2000 rows went from 1.56 s to 0.25 s (warm cache).
+
+## License
+
+MIT or Apache-2.0, at your option.
