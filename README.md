@@ -28,6 +28,7 @@ xlgrep "O'Brien" C:\dir -F       # literal text
 xlgrep smith -w                  # whole word (-wF "C++" works too)
 xlgrep smith -x                  # whole cell
 xlgrep smith --row               # print each matching row in full
+xlgrep smith --row --header      # ...with each value labeled by its column's header in row 1
 xlgrep smith --sheet Contacts    # only that sheet
 xlgrep VLOOKUP --formulas -l     # workbooks whose formulas use VLOOKUP
 xlgrep smith -c                  # hit count per file (rows with --row)
@@ -88,9 +89,11 @@ openpyxl or pandas scripts. xlgrep is one command instead, with no Python enviro
 
 `--json` prints JSON Lines: `{"file","sheet","cell","value"}` per hit, plus
 `"row_values": {"A": …, "C": …}` keyed by column with `--row` (formula cells only with
-`--formulas`). Only matching cells reach the agent's context, not whole sheets, and `-m`, `-l`,
-`-c` and `| head` cap how much comes back; closing the pipe early stops the search. Every hit
-names its sheet and cell, so a person can check it in Excel.
+`--formulas`). `--header` adds each value's column header from row 1 (`--header=3` for row 3):
+`"header"` for the hit, and `"row_headers"` keyed like `"row_values"` with `--row`, so an agent
+knows a value is an "Email" without reading the sheet. Only matching cells reach the agent's
+context, not whole sheets, and `-m`, `-l`, `-c` and `| head` cap how much comes back; closing the
+pipe early stops the search. Every hit names its sheet and cell, so a person can check it in Excel.
 
 Exit code 0 if anything matched, 1 if not, 2 on an error: bad arguments, a `--sheet` name no file
 has, or anything that couldn't be searched. Matches elsewhere still print and stderr names each
@@ -178,9 +181,10 @@ Paste this into your agent instructions (`AGENTS.md`, `CLAUDE.md`, …):
 ```markdown
 To search or read .xlsx/.xlsm/.xlsb/.xls/.ods files, use `xlgrep` instead of writing
 openpyxl/pandas scripts (if it isn't installed, `uvx xlgrep …` runs it). Use `--json` when
-parsing output: `{"file","sheet","cell","value"}` per hit; add `--row` for the whole matching row.
-Keep output small: `-m 20` per file, `| head -N` overall; `-l` (matching files) and `-c` (hits per
-file) print plain lines, not JSON.
+parsing output: `{"file","sheet","cell","value"}` per hit; add `--row` for the whole matching row
+and `--header` to label values with their column's header from row 1 (`--header=3` if the headers
+are in row 3). Keep output small: `-m 20` per file, `| head -N` overall; `-l` (matching files)
+and `-c` (hits per file) print plain lines, not JSON.
 Examples: `xlgrep "smith" -i --json -m 20`, `xlgrep VLOOKUP --formulas -l`,
 `xlgrep . book.xlsx --sheet Sheet1 --json | head -100` (dump a sheet's non-empty cells).
 Numbers are raw (search `51200`, not `$51,200.00`). Exit 1 = no match; exit 2 = something

@@ -30,6 +30,7 @@ Examples:
   xlgrep smith -i                 current folder, recursive, case-insensitive
   xlgrep \"O'Brien\" C:\\dir -F      literal text
   xlgrep smith --row              whole matching row (one line per row)
+  xlgrep smith --row --header     the same, each value labeled with its column's row-1 header
   xlgrep VLOOKUP --formulas -l    workbooks whose formulas use VLOOKUP
   xlgrep 1234 -x --json -m 5      exact cell match, JSON Lines, max 5 hits per file
   xlgrep smith --json | head -50  first 50 hits overall (the search stops early)
@@ -66,6 +67,16 @@ struct Args {
     /// print each matching row once, in full (with --formulas: the row's formula cells)
     #[arg(long)]
     row: bool,
+    /// label values with their column's header from row 1 (--header=N: from row N)
+    #[arg(
+        long,
+        value_name = "N",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "1",
+        conflicts_with_all = ["count", "files_with_matches", "formulas"]
+    )]
+    header: Option<usize>,
     /// search formula text (e.g. =SUM(A1:A9)) instead of cell values
     #[arg(long)]
     formulas: bool,
@@ -81,7 +92,7 @@ struct Args {
     /// only print matching files
     #[arg(short = 'l', long)]
     files_with_matches: bool,
-    /// JSON Lines: {"file","sheet","cell","value"} (+"row_values" with --row)
+    /// JSON Lines: {"file","sheet","cell","value"} (+"header", "row_values", "row_headers")
     #[arg(long, conflicts_with_all = ["count", "files_with_matches"])]
     json: bool,
     /// also search OneDrive online-only files (downloads them; skipped by default)
@@ -385,6 +396,23 @@ struct Report {
     hit_count: usize,
     /// per-sheet read failures: (sheet, reason)
     sheet_errors: Vec<(usize, String)>,
+    /// with `--header`: each sheet's header row as (column, text)
+    headers: Vec<Vec<(usize, String)>>,
+}
+
+impl Report {
+    /// With `--header`, the header of column `col` for a cell in `row`, if it's below the header
+    /// row (both 0-based; `header_row` is 1-based, as given).
+    fn header(
+        &self,
+        header_row: Option<usize>,
+        sheet: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<&str> {
+        let cols = self.headers.get(sheet).filter(|_| header_row.is_some_and(|h| row >= h))?;
+        cols.iter().find(|(c, _)| *c == col).map(|(_, text)| text.as_str())
+    }
 }
 
 fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
@@ -394,6 +422,7 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
     let mut wb = open(path).map_err(|e| why_unreadable(&e))?;
     let mut scan = Scan::new(rx, args);
     scan.rep.sheets = wb.sheet_names();
+    scan.rep.headers = vec![Vec::new(); scan.rep.sheets.len()];
     for si in 0..scan.rep.sheets.len() {
         let name = scan.rep.sheets[si].clone();
         // skipped before parsing, so filtering by sheet also saves the read (xlsx, xlsb)
@@ -513,6 +542,9 @@ impl<'a> Scan<'a> {
         if text.is_empty() {
             return false;
         }
+        if args.header == Some(row + 1) {
+            self.rep.headers[sheet].push((col, text.to_owned()));
+        }
         let whole_row = args.row && !args.count;
         if whole_row {
             self.row_cells.push((col, text.to_owned()));
@@ -570,6 +602,19 @@ fn json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
+/// `{"A":…,"C":…}`: keyed by column letter, so values map to columns even with gaps.
+fn json_columns<'a>(out: &mut String, cols: impl Iterator<Item = (usize, &'a str)>) {
+    out.push('{');
+    for (i, (c, text)) in cols.enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "\"{}\":", col_letter(c));
+        json_str(out, text);
+    }
+    out.push('}');
+}
+
 struct Printer<'a> {
     args: &'a Args,
     rx: &'a Regex,
@@ -586,12 +631,17 @@ impl Printer<'_> {
         if self.color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_owned() }
     }
 
-    /// Cells joined by `ROW_SEP`, matches highlighted, control characters shown dim and escaped
-    /// (`\n`, `\u{1b}`), cut to `budget` chars with a trailing `…` when they don't fit.
+    /// Cells joined by `ROW_SEP`, each after its dim `header: ` if it has one, matches
+    /// highlighted, control characters shown dim and escaped (`\n`, `\u{1b}`), cut to `budget`
+    /// chars with a trailing `…` when they don't fit.
     // ponytail: counts chars, not display columns; wide (CJK) text can still wrap
-    fn render(&self, cells: &[&str], budget: Option<usize>) -> String {
+    fn render(&self, cells: &[(Option<&str>, &str)], budget: Option<usize>) -> String {
         let sep = ROW_SEP.chars().count();
-        let total: usize = cells.iter().map(|c| visible(c).chars().count()).sum::<usize>()
+        let label = |header: Option<&str>| header.map(|h| format!("{}: ", visible(h)));
+        let total: usize = cells
+            .iter()
+            .map(|&(h, c)| label(h).map_or(0, |l| l.chars().count()) + visible(c).chars().count())
+            .sum::<usize>()
             + sep * cells.len().saturating_sub(1);
         // one char reserved for the `…`, only when it'll be needed
         let mut left = match budget {
@@ -599,7 +649,7 @@ impl Printer<'_> {
             _ => usize::MAX,
         };
         let mut out = String::new();
-        for (i, cell) in cells.iter().enumerate() {
+        for (i, &(header, cell)) in cells.iter().enumerate() {
             if i > 0 {
                 if sep > left {
                     out.push('…');
@@ -607,6 +657,15 @@ impl Printer<'_> {
                 }
                 out += &self.paint(ROW_SEP, DIM);
                 left -= sep;
+            }
+            if let Some(l) = label(header) {
+                let n = l.chars().count();
+                if n > left {
+                    out.push('…');
+                    break;
+                }
+                out += &self.paint(&l, DIM);
+                left -= n;
             }
             if !self.push_cell(&mut out, cell, &mut left) {
                 out.push('…');
@@ -649,11 +708,13 @@ impl Printer<'_> {
         self.rx.replace_all(text, |m: &regex::Captures| self.paint(&m[0], MATCH)).into_owned()
     }
 
-    fn cells<'h>(&self, h: &'h Hit) -> Vec<&'h str> {
+    /// What a hit shows: its cell, or its row with `--row`; each with its header if any.
+    fn cells<'r>(&self, rep: &'r Report, h: &'r Hit) -> Vec<(Option<&'r str>, &'r str)> {
+        let header = |col| rep.header(self.args.header, h.sheet, h.row, col);
         if self.args.row {
-            h.row_values.iter().map(|(_, v)| v.as_str()).collect()
+            h.row_values.iter().map(|(c, v)| (header(*c), v.as_str())).collect()
         } else {
-            vec![&h.text]
+            vec![(header(h.col), h.text.as_str())]
         }
     }
 
@@ -670,17 +731,20 @@ impl Printer<'_> {
                 json_str(&mut line, &rep.sheets[h.sheet]);
                 let _ = write!(line, ",\"cell\":\"{}\",\"value\":", h.cell());
                 json_str(&mut line, &h.text);
+                let header = |col| rep.header(args.header, h.sheet, h.row, col);
+                if let Some(text) = header(h.col) {
+                    line.push_str(",\"header\":");
+                    json_str(&mut line, text);
+                }
                 if args.row {
-                    // keyed by column letter so values map to columns even with gaps
-                    line.push_str(",\"row_values\":{");
-                    for (i, (c, v)) in h.row_values.iter().enumerate() {
-                        if i > 0 {
-                            line.push(',');
-                        }
-                        let _ = write!(line, "\"{}\":", col_letter(*c));
-                        json_str(&mut line, v);
+                    line.push_str(",\"row_values\":");
+                    json_columns(&mut line, h.row_values.iter().map(|(c, v)| (*c, v.as_str())));
+                    if args.header.is_some() {
+                        line.push_str(",\"row_headers\":");
+                        let headers =
+                            h.row_values.iter().filter_map(|(c, _)| Some((*c, header(*c)?)));
+                        json_columns(&mut line, headers);
                     }
-                    line.push('}');
                 }
                 line.push('}');
                 writeln!(out, "{line}")?;
@@ -703,7 +767,7 @@ impl Printer<'_> {
                 writeln!(
                     out,
                     "{name} {sep} {sheet} {sep} {cell} {sep} {}",
-                    self.render(&self.cells(h), None)
+                    self.render(&self.cells(rep, h), None)
                 )?;
             }
             return Ok(());
@@ -728,7 +792,7 @@ impl Printer<'_> {
                 self.paint(sheet, SHEET),
                 self.paint(cell, CELL),
                 "",
-                self.render(&self.cells(h), budget)
+                self.render(&self.cells(rep, h), budget)
             )?;
         }
         Ok(())
@@ -1008,10 +1072,14 @@ mod tests {
             width: None,
             files_printed: 0,
         };
-        assert_eq!(p.render(&["abcde"], Some(5)), "abcde"); // exact fit: no ellipsis
-        assert_eq!(p.render(&["abcdef"], Some(5)), "abcd…");
-        assert_eq!(p.render(&["ab", "cdef"], Some(7)), "ab │ c…");
-        assert_eq!(p.render(&["a\nb\u{1b}"], None), "a\\nb\\u{1b}");
+        assert_eq!(p.render(&[(None, "abcde")], Some(5)), "abcde"); // exact fit: no ellipsis
+        assert_eq!(p.render(&[(None, "abcdef")], Some(5)), "abcd…");
+        assert_eq!(p.render(&[(None, "ab"), (None, "cdef")], Some(7)), "ab │ c…");
+        assert_eq!(p.render(&[(None, "a\nb\u{1b}")], None), "a\\nb\\u{1b}");
+        // headers count toward the width too
+        let row = [(Some("Name"), "Ann"), (Some("Tel"), "555")];
+        assert_eq!(p.render(&row, None), "Name: Ann │ Tel: 555");
+        assert_eq!(p.render(&row, Some(14)), "Name: Ann │ …");
     }
 
     #[test]

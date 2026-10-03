@@ -91,3 +91,25 @@ fn a_file_reached_twice_is_searched_once() {
     let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
     assert_eq!(stdout.matches("contacts.xlsx").count(), 1, "{stdout}");
 }
+
+#[test]
+fn header_labels_values_with_row_1() {
+    // --header takes its row as `--header=N`, so `jane` here is the pattern, not a row
+    let out = xlgrep(&["--header", "jane", "-i", "--json", "--row", BOOK]);
+    assert_eq!(out.status.code(), Some(0));
+    let json = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        json.contains(concat!(
+            r#""value":"Jane Smith","header":"Name","#,
+            r#""row_values":{"A":"Jane Smith","B":"jsmith@contoso.com","C":"555-0178"},"#,
+            r#""row_headers":{"A":"Name","B":"Email","C":"Phone"}}"#
+        )),
+        "{json}"
+    );
+    // a hit in the header row itself has no header
+    let out = xlgrep(&["Email", "--header", "--json", BOOK]);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("\"header\""));
+    // piped text labels the value
+    let out = xlgrep(&["jsmith", "--header", BOOK]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Email: jsmith@contoso.com"));
+}
