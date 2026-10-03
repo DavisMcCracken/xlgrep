@@ -28,7 +28,7 @@ xlgrep "O'Brien" C:\dir -F       # literal text
 xlgrep smith -w                  # whole word (-wF "C++" works too)
 xlgrep smith -x                  # whole cell
 xlgrep smith --row               # print each matching row in full
-xlgrep smith --sheet Contacts    # only that sheet (others aren't even parsed)
+xlgrep smith --sheet Contacts    # only that sheet
 xlgrep VLOOKUP --formulas -l     # workbooks whose formulas use VLOOKUP
 xlgrep smith -c                  # hit count per file (rows with --row)
 xlgrep smith -m 5                # stop each file after 5 hits
@@ -50,7 +50,7 @@ Run `xlgrep --help` for the full option list.
 
 `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods`, read with [calamine](https://github.com/tafia/calamine).
 No Excel or LibreOffice needed. Values print as Excel shows them where calamine allows: `TRUE`,
-`2024-03-05`, `36:05:07` durations.
+`2024-03-05`, `14:30:00`, `36:05:07` durations.
 </details>
 
 <details>
@@ -60,8 +60,8 @@ No Excel or LibreOffice needed. Values print as Excel shows them where calamine 
 <p></p>
 
 Patterns are regexes; `-F` for literal text, `-i` to ignore case, `-w` for whole words (`-wF "C++"`
-works too), `-x` to match the whole cell. `--sheet` limits the search to sheets with that name;
-the others aren't even parsed. `--formulas` searches formula text (`=SUM(A1:A9)`) instead of values.
+works too), `-x` to match the whole cell. `--sheet` limits the search to sheets with that name
+(case-insensitive). `--formulas` searches formula text (`=SUM(A1:A9)`) instead of values.
 </details>
 
 <details>
@@ -91,11 +91,11 @@ openpyxl or pandas scripts. xlgrep is one command instead, with no Python enviro
 `-c` and `| head` cap how much comes back; closing the pipe early stops the search. Every hit
 names its sheet and cell, so a person can check it in Excel.
 
-Exit code 0 if anything matched, 1 if not, 2 on an error: bad arguments, or anything that couldn't
-be searched. Matches elsewhere still print and stderr names each skipped file and why, so an agent
-can tell "not there" from "couldn't look". xlgrep is read-only and won't download OneDrive files
-unless asked, so it's safe to let an agent run it without approval. See
-[Using with AI agents](#using-with-ai-agents).
+Exit code 0 if anything matched, 1 if not, 2 on an error: bad arguments, a `--sheet` name no file
+has, or anything that couldn't be searched. Matches elsewhere still print and stderr names each
+skipped file and why, so an agent can tell "not there" from "couldn't look". xlgrep is read-only
+and won't download OneDrive files unless asked, so it's safe to let an agent run it without
+approval. See [Using with AI agents](#using-with-ai-agents).
 </details>
 
 <details>
@@ -105,7 +105,8 @@ unless asked, so it's safe to let an agent run it without approval. See
 <p></p>
 
 Files are read in parallel and output stays in file order: 400 files x 2000 rows take 0.25 s
-instead of 1.56 s read one at a time. `--sheet` skips parsing other sheets entirely.
+instead of 1.56 s read one at a time. `.xlsx` and `.xlsb` sheets are streamed, not loaded whole,
+and `--sheet` skips reading the others.
 </details>
 
 <details>
@@ -125,8 +126,9 @@ OneDrive online-only files are skipped by default, so a search never mass-downlo
 <p></p>
 
 Unreadable files and folders (password-protected, corrupt, access denied, OneDrive offline) are
-skipped with a reason, and the exit code says so. Control characters in cells print escaped
-(`\n`, `\u{1b}`), so a cell can't break lines or inject terminal codes.
+skipped with a reason, and the exit code says so; so is a file that crashes the reader. Control
+characters in cells print escaped (`\n`, `\u{1b}`), so a cell can't break lines or inject terminal
+codes.
 </details>
 
 <details>
@@ -166,12 +168,13 @@ Paste this into your agent instructions (`AGENTS.md`, `CLAUDE.md`, …):
 ```markdown
 To search or read .xlsx/.xlsm/.xlsb/.xls/.ods files, use `xlgrep` instead of writing
 openpyxl/pandas scripts. Use `--json` when parsing output: `{"file","sheet","cell","value"}`
-per hit; add `--row` for the whole matching row. Keep output small: `-m 20` per file, `-l` for
-matching files only, `-c` for counts, `| head -N` overall.
+per hit; add `--row` for the whole matching row. Keep output small: `-m 20` per file, `| head -N`
+overall; `-l` (matching files) and `-c` (hits per file) print plain lines, not JSON.
 Examples: `xlgrep "smith" -i --json -m 20`, `xlgrep VLOOKUP --formulas -l`,
 `xlgrep . book.xlsx --sheet Sheet1 --json | head -100` (dump a sheet's non-empty cells).
 Numbers are raw (search `51200`, not `$51,200.00`). Exit 1 = no match; exit 2 = something
-couldn't be searched: read stderr before concluding a value isn't there.
+couldn't be searched: read stderr before concluding a value isn't there (it also lists skipped
+OneDrive online-only files, which don't change the exit code).
 Don't pass `--download` (it downloads OneDrive online-only files) without asking.
 ```
 

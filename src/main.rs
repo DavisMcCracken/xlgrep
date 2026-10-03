@@ -30,8 +30,9 @@ Examples:
 Output: grouped by file with Sheet!A1 refs in a terminal; `file | sheet | cell | value`
 when piped. That text is for reading: control characters print escaped (\\n, \\u{1b}) and
 long values are cut in a terminal. Use --json for anything that parses output.
-Exit code: 0 match, 1 no match, 2 error (bad arguments, or a file/folder couldn't be
-searched; matches found elsewhere are still printed). Skipped OneDrive files aren't errors.";
+Exit code: 0 match, 1 no match, 2 error (bad arguments, a --sheet no file has, or a file or
+folder couldn't be searched; matches found elsewhere are still printed). Skipped OneDrive
+files aren't errors.";
 
 /// Search spreadsheet cell values across folders (read-only).
 #[derive(Parser)]
