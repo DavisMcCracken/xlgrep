@@ -1,7 +1,7 @@
 # xlgrep
 
 Search spreadsheet cell values across folders of `.xlsx` / `.xlsm` / `.xlsb` / `.xls` / `.ods`
-files. Read-only. Rust rewrite of the original [Python xlgrep](https://github.com/DavisMcCracken/xlgrep)
+files. Read-only. Rust rewrite of the original [Python xlgrep](https://github.com/DavisMcCracken/xlgrep-py)
 (same reader, calamine); files are read in parallel, output stays in file order.
 
 ```
