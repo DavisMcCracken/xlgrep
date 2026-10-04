@@ -38,6 +38,9 @@ Examples:
 Output: grouped by file with Sheet!A1 refs in a terminal; `file | sheet | cell | value`
 when piped. That text is for reading: control characters print escaped (\\n, \\u{1b}) and
 long values are cut in a terminal. Use --json for anything that parses output.
+Values: numbers raw (51200, not $51,200.00; 0.15 for 15%), dates 2024-03-05, TRUE/FALSE.
+Use -x for an exact value: 51200 alone also matches 151200 and 51200.75.
+.csv/.tsv files aren't searched (plain text: use grep); folder searches count them on stderr.
 Exit code: 0 match, 1 no match, 2 error (bad arguments, a --sheet no file has, or a file or
 folder couldn't be searched; matches found elsewhere are still printed). Skipped OneDrive
 files aren't errors.";
@@ -126,8 +129,9 @@ fn is_spreadsheet(p: &Path) -> bool {
 }
 
 /// Collect (path, `cloud_only`) like `os.walk`: a folder's files (sorted), then its subfolders.
-/// Rust's std handles paths past `MAX_PATH` itself. Unreadable folders count in `errors`.
-fn walk(dir: &Path, out: &mut Vec<(PathBuf, bool)>, errors: &mut usize) {
+/// Rust's std handles paths past `MAX_PATH` itself. Unreadable folders count in `errors`,
+/// .csv/.tsv files in `plain`.
+fn walk(dir: &Path, out: &mut Vec<(PathBuf, bool)>, errors: &mut usize, plain: &mut usize) {
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -158,14 +162,20 @@ fn walk(dir: &Path, out: &mut Vec<(PathBuf, bool)>, errors: &mut usize) {
                 continue;
             }
         };
+        let path = e.path();
         if meta.is_dir() {
-            subdirs.push(e.path());
-        } else if is_spreadsheet(&e.path()) {
-            out.push((e.path(), is_cloud_only(&meta)));
+            subdirs.push(path);
+        } else if is_spreadsheet(&path) {
+            out.push((path, is_cloud_only(&meta)));
+        } else if path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("csv") || x.eq_ignore_ascii_case("tsv"))
+        {
+            *plain += 1;
         }
     }
     for d in subdirs {
-        walk(&d, out, errors);
+        walk(&d, out, errors, plain);
     }
 }
 
@@ -398,6 +408,9 @@ struct Report {
     sheet_errors: Vec<(usize, String)>,
     /// with `--header`: each sheet's header row as (column, text)
     headers: Vec<Vec<(usize, String)>>,
+    /// with `--header`: each sheet's first row (0-based) with 2+ values in the 10 below the
+    /// header row, where the headers may really be if the header row is a title
+    header_guess: Vec<Option<usize>>,
 }
 
 impl Report {
@@ -413,6 +426,23 @@ impl Report {
         let cols = self.headers.get(sheet).filter(|_| header_row.is_some_and(|h| row >= h))?;
         cols.iter().find(|(c, _)| *c == col).map(|(_, text)| text.as_str())
     }
+
+    /// Sheets whose header row looks like a title (at most one value) while hits below
+    /// `header_guess` are in columns it doesn't label: (sheet, 1-based row to try instead).
+    fn header_hints(&self) -> Vec<(usize, usize)> {
+        let hint = |(si, guess): (usize, &Option<usize>)| {
+            let guess = (*guess)?;
+            let labels = &self.headers[si];
+            let unlabeled = |col: usize| labels.iter().all(|(c, _)| *c != col);
+            let needs_labels = self
+                .hits
+                .iter()
+                .filter(|h| h.sheet == si && h.row > guess)
+                .any(|h| unlabeled(h.col) || h.row_values.iter().any(|(c, _)| unlabeled(*c)));
+            (labels.len() <= 1 && needs_labels).then_some((si, guess + 1))
+        };
+        self.header_guess.iter().enumerate().filter_map(hint).collect()
+    }
 }
 
 fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
@@ -423,6 +453,7 @@ fn search(path: &Path, rx: &Regex, args: &Args) -> Result<Report, String> {
     let mut scan = Scan::new(rx, args);
     scan.rep.sheets = wb.sheet_names();
     scan.rep.headers = vec![Vec::new(); scan.rep.sheets.len()];
+    scan.rep.header_guess = vec![None; scan.rep.sheets.len()];
     for si in 0..scan.rep.sheets.len() {
         let name = scan.rep.sheets[si].clone();
         // skipped before parsing, so filtering by sheet also saves the read (xlsx, xlsb)
@@ -521,12 +552,25 @@ struct Scan<'a> {
     row_cells: Vec<(usize, String)>,
     row_matched: bool,
     pending: Option<Hit>,
+    /// with `--header`: the row below the header row being counted toward `header_guess`
+    /// as (sheet, row), and its values so far
+    guess_row: Option<(usize, usize)>,
+    guess_values: usize,
 }
 
 impl<'a> Scan<'a> {
     fn new(rx: &'a Regex, args: &'a Args) -> Self {
-        let rep = Report::default();
-        Scan { rx, args, rep, row: None, row_cells: Vec::new(), row_matched: false, pending: None }
+        Scan {
+            rx,
+            args,
+            rep: Report::default(),
+            row: None,
+            row_cells: Vec::new(),
+            row_matched: false,
+            pending: None,
+            guess_row: None,
+            guess_values: 0,
+        }
     }
 
     /// Feeds one cell (0-based, absolute). Returns true when the file is done: an `-l` hit,
@@ -542,8 +586,19 @@ impl<'a> Scan<'a> {
         if text.is_empty() {
             return false;
         }
-        if args.header == Some(row + 1) {
-            self.rep.headers[sheet].push((col, text.to_owned()));
+        if let Some(h) = args.header {
+            if h == row + 1 {
+                self.rep.headers[sheet].push((col, text.to_owned()));
+            } else if (h..h + 10).contains(&row) && self.rep.header_guess[sheet].is_none() {
+                if self.guess_row != Some((sheet, row)) {
+                    self.guess_row = Some((sheet, row));
+                    self.guess_values = 0;
+                }
+                self.guess_values += 1;
+                if self.guess_values == 2 {
+                    self.rep.header_guess[sheet] = Some(row);
+                }
+            }
         }
         let whole_row = args.row && !args.count;
         if whole_row {
@@ -829,8 +884,9 @@ fn build_regex(args: &Args) -> Result<Regex, String> {
 }
 
 /// Spreadsheets to search, as (path, `cloud_only`), each once in first-seen order. Counts
-/// unusable path arguments and unreadable folders in `errors`.
-fn collect(paths: &[PathBuf], errors: &mut usize) -> Vec<(PathBuf, bool)> {
+/// unusable path arguments and unreadable folders in `errors`, .csv/.tsv files in folders in
+/// `plain`.
+fn collect(paths: &[PathBuf], errors: &mut usize, plain: &mut usize) -> Vec<(PathBuf, bool)> {
     let mut found = Vec::new();
     for p in paths {
         match std::fs::metadata(p) {
@@ -842,7 +898,7 @@ fn collect(paths: &[PathBuf], errors: &mut usize) -> Vec<(PathBuf, bool)> {
                 eprintln!("xlgrep: {}: {why}", p.display());
                 *errors += 1;
             }
-            Ok(m) if m.is_dir() => walk(p, &mut found, errors),
+            Ok(m) if m.is_dir() => walk(p, &mut found, errors, plain),
             Ok(m) if is_spreadsheet(p) => found.push((p.clone(), is_cloud_only(&m))),
             Ok(_) => {
                 let exts = EXTS.join(" ");
@@ -944,7 +1000,8 @@ fn main() -> ExitCode {
 
     // anything that left the search incomplete: exit 2, like grep (cloud skips are deliberate)
     let mut errors = 0usize;
-    let found = collect(&args.paths, &mut errors);
+    let mut plain = 0usize;
+    let found = collect(&args.paths, &mut errors, &mut plain);
     let total = found.len();
     let files: Vec<PathBuf> =
         found.into_iter().filter(|(_, cloud)| args.download || !cloud).map(|(p, _)| p).collect();
@@ -995,6 +1052,12 @@ fn main() -> ExitCode {
         for (si, why) in &rep.sheet_errors {
             eprintln!("xlgrep: skipped {name} | {}: {why}", visible(&rep.sheets[*si]));
         }
+        for (si, row) in rep.header_hints() {
+            let (sheet, h) = (visible(&rep.sheets[si]), args.header.unwrap_or(1));
+            eprintln!(
+                "xlgrep: {name} | {sheet}: row {h} doesn't look like column headers; try --header={row}"
+            );
+        }
         if rep.hit_count > 0 {
             hits += rep.hit_count;
             files_hit += 1;
@@ -1023,6 +1086,10 @@ fn main() -> ExitCode {
             "xlgrep: skipped {} (use --download to include)",
             plural(cloud_skipped, "OneDrive online-only file", "OneDrive online-only files")
         );
+    }
+    if plain > 0 {
+        let files = plural(plain, ".csv/.tsv file", ".csv/.tsv files");
+        eprintln!("xlgrep: not searched: {files} (plain text: use grep)");
     }
     if tty && !args.files_with_matches {
         printer.color &= io::stderr().is_terminal(); // the summary goes to stderr: maybe a log
@@ -1118,6 +1185,29 @@ mod tests {
         let row0 = vec![(0, s("a")), (1, s("smith")), (2, s("smith"))];
         let row1 = vec![(0, s("smith")), (3, s("z"))];
         assert_eq!(got, [(0, 1, &row0), (1, 0, &row1)]);
+    }
+
+    #[test]
+    fn a_title_in_the_header_row_suggests_the_real_one() {
+        let args = Args::parse_from(["xlgrep", "Ann", "--header"]);
+        let rx = build_regex(&args).unwrap();
+        let hints = |cells: &[(usize, usize, &str)]| {
+            let mut scan = Scan::new(&rx, &args);
+            scan.rep.sheets = vec!["S".into()];
+            scan.rep.headers = vec![Vec::new()];
+            scan.rep.header_guess = vec![None];
+            for &(r, c, t) in cells {
+                scan.cell(0, r, c, t);
+            }
+            scan.rep.header_hints()
+        };
+        // title, note, headers in row 3, data
+        let titled = [(0, 0, "Staff"), (1, 0, "Updated May"), (2, 0, "Name"), (2, 1, "Mgr")];
+        assert_eq!(hints(&[&titled[..], &[(3, 0, "Bo"), (3, 1, "Ann")]].concat()), [(0, 3)]);
+        // a hit in the one labeled column needs no other header row
+        assert_eq!(hints(&[&titled[..], &[(3, 0, "Ann"), (3, 1, "Bo")]].concat()), []);
+        // real headers in row 1
+        assert_eq!(hints(&[(0, 0, "Name"), (0, 1, "Mgr"), (1, 0, "Bo"), (1, 1, "Ann")]), []);
     }
 
     #[test]

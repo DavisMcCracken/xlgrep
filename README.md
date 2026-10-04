@@ -51,7 +51,8 @@ Run `xlgrep --help` for the full option list.
 
 `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods`, plus `.xltx`/`.xltm` templates, read with
 [calamine](https://github.com/tafia/calamine). No Excel or LibreOffice needed. Values print as Excel shows them where calamine allows: `TRUE`,
-`2024-03-05`, `14:30:00`, `36:05:07` durations.
+`2024-03-05`, `14:30:00`, `36:05:07` durations. `.csv` and `.tsv` are plain text and aren't
+searched; a folder search says on stderr how many it passed over, so you can grep them.
 </details>
 
 <details>
@@ -91,7 +92,8 @@ openpyxl or pandas scripts. xlgrep is one command instead, with no Python enviro
 `"row_values": {"A": …, "C": …}` keyed by column with `--row` (formula cells only with
 `--formulas`). `--header` adds each value's column header from row 1 (`--header=3` for row 3):
 `"header"` for the hit, and `"row_headers"` keyed like `"row_values"` with `--row`, so an agent
-knows a value is an "Email" without reading the sheet. Only matching cells reach the agent's
+knows a value is an "Email" without reading the sheet. When row 1 looks like a title rather than
+headers, stderr suggests the row to use (`try --header=3`). Only matching cells reach the agent's
 context, not whole sheets, and `-m`, `-l`, `-c` and `| head` cap how much comes back; closing the
 pipe early stops the search. Every hit names its sheet and cell, so a person can check it in Excel.
 
@@ -180,16 +182,20 @@ Paste this into your agent instructions (`AGENTS.md`, `CLAUDE.md`, …):
 
 ```markdown
 To search or read .xlsx/.xlsm/.xlsb/.xls/.ods files, use `xlgrep` instead of writing
-openpyxl/pandas scripts (if it isn't installed, `uvx xlgrep …` runs it). Use `--json` when
+openpyxl/pandas scripts (if `xlgrep --version` fails, `uvx xlgrep …` runs it). Use `--json` when
 parsing output: `{"file","sheet","cell","value"}` per hit; add `--row` for the whole matching row
 and `--header` to label values with their column's header from row 1 (`--header=3` if the headers
-are in row 3). Keep output small: `-m 20` per file, `| head -N` overall; `-l` (matching files)
-and `-c` (hits per file) print plain lines, not JSON.
+are in row 3; stderr suggests the row when row 1 looks like a title). Keep output small: `-m 20`
+per file, `| head -N` overall; `-l` (matching files) and `-c` (hits per file) print plain lines,
+not JSON.
 Examples: `xlgrep "smith" -i --json -m 20`, `xlgrep VLOOKUP --formulas -l`,
 `xlgrep . book.xlsx --sheet Sheet1 --json | head -100` (dump a sheet's non-empty cells).
-Numbers are raw (search `51200`, not `$51,200.00`). Exit 1 = no match; exit 2 = something
-couldn't be searched: read stderr before concluding a value isn't there (it also lists skipped
-OneDrive online-only files, which don't change the exit code).
+Values are raw: search `51200`, not `$51,200.00`, and `0.15`, not `15%`; dates are `2024-03-05`.
+Add `-x` for an exact value (`51200` alone also matches `151200`). .csv/.tsv files aren't
+searched (stderr counts them): grep those separately.
+Exit 1 = no match; exit 2 = something couldn't be searched: read stderr before concluding a value
+isn't there (it also lists skipped OneDrive online-only files, which don't change the exit code).
+PowerShell's `-Command` reports exit 2 as 1, so read stderr there too.
 Don't pass `--download` (it downloads OneDrive online-only files) without asking.
 ```
 

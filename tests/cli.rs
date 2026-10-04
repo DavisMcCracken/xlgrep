@@ -50,6 +50,21 @@ fn exit_codes_tell_no_match_from_error() {
 }
 
 #[test]
+fn folder_csvs_are_counted_not_searched() {
+    // an agent asked "which files mention X" must learn the CSVs weren't looked at
+    let dir = std::env::temp_dir().join(format!("xlgrep-csv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(BOOK, dir.join("good.xlsx")).unwrap();
+    std::fs::write(dir.join("export.CSV"), "name\nJane Smith\n").unwrap();
+    let out = xlgrep(&["smith", "-i", "-l", dir.to_str().unwrap()]);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(out.status.code(), Some(0)); // a note, not an error
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not searched: 1 .csv/.tsv file"), "{stderr}");
+}
+
+#[test]
 fn a_far_off_cell_is_streamed_not_allocated() {
     // far-cell.xlsx = contacts.xlsx plus "far corner" at XFD1048576, which once made calamine
     // allocate the whole sheet (512 GiB) and abort
